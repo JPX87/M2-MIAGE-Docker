@@ -1,0 +1,64 @@
+graph TB
+    subgraph "Réseau sql_Spring"
+        NGINX[Nginx<br/>Port: NGINX_PORT:80]
+        APP1[spring-app_1<br/>Expose: APP_PORT]
+        APP2[spring-app_2<br/>Expose: APP_PORT]
+    end
+
+    subgraph "Réseau sql_PHPAdmin"
+        PMA[PHPMyAdmin<br/>Port: PHPMYADMIN_PORT:80]
+    end
+
+    subgraph "Réseau sql_Backup"
+        BACKUP[mysql-backup<br/>Sauvegarde toutes les 12h]
+    end
+
+    subgraph "Réseau sonar_network"
+        SONAR[SonarQube<br/>Port: SONAR_PORT:9000]
+        SONARDB[(PostgreSQL 17<br/>Port: 5432)]
+        SCANNER[sonar-maven-scanner<br/>Profile: scan]
+    end
+
+    %% MySQL au centre connecté aux 3 réseaux
+    MYSQL[(MySQL 8.4<br/>Port: DB_PORT<br/>Healthcheck actif)]
+
+    %% Connexions réseau sql_Spring
+    NGINX -->|Load Balancing| APP1
+    NGINX -->|Load Balancing| APP2
+    APP1 -->|JDBC| MYSQL
+    APP2 -->|JDBC| MYSQL
+
+    %% Connexions réseau sql_PHPAdmin
+    PMA -->|Gestion DB| MYSQL
+
+    %% Connexions réseau sql_Backup
+    BACKUP -->|Backup périodique| MYSQL
+
+    %% Connexions réseau sonar_network
+    SCANNER -->|Analyse code| SONAR
+    SONAR -->|Stockage| SONARDB
+
+    %% Volumes persistants
+    MYSQL -.->|Volume| V1[db_data]
+    SONARDB -.->|Volume| V2[sonar_db_data]
+    SONAR -.->|Volume| V3[sonar_data]
+    SONAR -.->|Volume| V4[sonar_extensions]
+    SONAR -.->|Volume| V5[sonar_logs]
+    SCANNER -.->|Volume| V6[maven_cache]
+    BACKUP -.->|Volume| V7[./backups]
+
+    %% Fichiers montés
+    NGINX -.->|Mount ro| F1[./nginx.conf]
+    MYSQL -.->|Mount ro| F2[./monannuaire_mysql.sql]
+    BACKUP -.->|Mount ro| F3[./backup.sh]
+
+    %% Légende
+    classDef database fill:#f9f,stroke:#333,stroke-width:2px,color:#000
+    classDef service fill:#bbf,stroke:#333,stroke-width:2px,color:#000
+    classDef volume fill:#efe,stroke:#333,stroke-width:1px,stroke-dasharray: 5 5,color:#000
+    classDef file fill:#ffe,stroke:#333,stroke-width:1px,stroke-dasharray: 3 3,color:#000
+
+    class MYSQL,SONARDB database
+    class NGINX,APP1,APP2,PMA,BACKUP,SONAR,SCANNER service
+    class V1,V2,V3,V4,V5,V6,V7 volume
+    class F1,F2,F3 file
