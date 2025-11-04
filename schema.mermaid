@@ -1,26 +1,28 @@
 graph TB
-    subgraph "Réseau sql_Spring"
-        NGINX[Nginx<br/>Port: NGINX_PORT:80]
-        APP1[spring-app_1<br/>Expose: APP_PORT]
-        APP2[spring-app_2<br/>Expose: APP_PORT]
+    subgraph "🟥 Réseau sql_Spring"
+        NGINX[Nginx<br/> 🌍 Port externe: 80]
+        APP1[spring-app_1<br/>🔒 Port interne: 8080]
+        APP2[spring-app_2<br/>🔒 Port interne: 8080]
     end
 
-    subgraph "Réseau sql_PHPAdmin"
-        PMA[PHPMyAdmin<br/>Port: PHPMYADMIN_PORT:80]
+    subgraph "🟧 Réseau sql_PHPAdmin"
+        PMA[PHPMyAdmin<br/> 🌍 Port externe: 20000]
     end
 
-    subgraph "Réseau sql_Backup"
+    subgraph "🟨 Réseau sql_Backup"
         BACKUP[mysql-backup<br/>Sauvegarde toutes les 12h]
     end
 
-    subgraph "Réseau sonar_network"
-        SONAR[SonarQube<br/>Port: SONAR_PORT:9000]
-        SONARDB[(PostgreSQL 17<br/>Port: 5432)]
+    subgraph "🔵 Réseau sonar_network"
+        SONAR[SonarQube<br/> 🌍 Port externe: 9000]
+        SONARDB[(PostgreSQL 17<br/>🔒 Port interne: 5432)]
         SCANNER[sonar-maven-scanner<br/>Profile: scan]
     end
 
     %% MySQL au centre connecté aux 3 réseaux
-    MYSQL[(MySQL 8.4<br/>Port: DB_PORT<br/>Healthcheck actif)]
+    subgraph "Connecté aux 3 réseaux 🟨/🟧/🟥"
+        MYSQL[(MySQL 8.4<br/>🔒 Port interne: 3306<br/>Healthcheck actif)]
+    end
 
     %% Connexions réseau sql_Spring
     NGINX -->|Load Balancing| APP1
