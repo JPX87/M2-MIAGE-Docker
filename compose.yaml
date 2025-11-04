@@ -1,4 +1,5 @@
 x-spring-app: &spring-app-base
+  # Config réutilisable pour les différentes spring app
   build:
     context: .
     dockerfile: Dockerfile
@@ -20,25 +21,25 @@ x-spring-app: &spring-app-base
       max-file: "3"
 
 services:
-  spring-app_1:
+  spring-app_1: # spring-app v1
     <<: *spring-app-base
     container_name: spring-app_1
     expose:
       - ${APP_PORT}
 
-  spring-app_2:
+  spring-app_2: # spring-app v2
     <<: *spring-app-base
     container_name: spring-app_2
     expose:
       - ${APP_PORT}
 
   nginx:
-    image: nginx:latest
+    image: nginx:latest # Dernière version LTS de Nginx
     container_name: nginx
     ports:
       - "${NGINX_PORT}:80"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro # Read only uniquement
     depends_on:
       - spring-app_1
       - spring-app_2
@@ -52,12 +53,12 @@ services:
       MYSQL_DATABASE: ${DB_NAME}
       MYSQL_USER: ${DB_USER}
       MYSQL_PASSWORD: ${DB_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${DB_USER_ROOT}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
     volumes:
       # Volume de données persistantes
       - db_data:/var/lib/mysql
       # Exécute automatiquement tous les .sql/.sh/.sql.gz au premier démarrage
-      - ./monannuaire_mysql.sql:/docker-entrypoint-initdb.d/db.sql
+      - ./monannuaire_mysql.sql:/docker-entrypoint-initdb.d/db.sql:ro  # Read only uniquement
     networks:
       - sql_Spring # Réseaux de MySQL et App Srping
       - sql_PHPAdmin # Réseaux de MySQL et PHPMyadmin
@@ -65,9 +66,9 @@ services:
     healthcheck:
       #On vérifie que la BD est bien démarrée (Objectif éviter que Spring crash dès le début!)
       test: ["CMD-SHELL", "mysql -u${DB_USER} -p${DB_PASSWORD} -e 'USE ${DB_NAME};' || exit 1"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 30
       start_period: 5s
 
   phpmyadmin:
@@ -85,57 +86,48 @@ services:
       - sql_PHPAdmin
 
   mysql-backup:
-    image: mysql:8.4
+    # Service autonome créée pour l'occasion avec un script .sh
+    # Sauvegarde la base de donnée toutes les 12h
+    image: mysql:8.4 # Dernière version LTS de MySQL
     container_name: mysql-backup
     depends_on:
       mysql:
         condition: service_healthy
     volumes:
       - ./backups:/backups
-    entrypoint: [ "sh", "-c" ]
-    command: >
-      "until mysql -hmysql -u${DB_USER} -p${DB_PASSWORD} -e 'SELECT 1;' 2>/dev/null; do
-         echo 'Waiting for MySQL...';
-         sleep 5;
-       done;
-       while true; do
-         BACKUP_FILE=/backups/${DB_NAME}_$(date +%Y%m%d_%H%M%S).sql.gz
-         if mysqldump -hmysql -u${DB_USER} -p${DB_PASSWORD} ${DB_NAME} | gzip > $BACKUP_FILE; then
-           echo \"Backup successful: $BACKUP_FILE\"
-           find /backups -type f -name '${DB_NAME}_*.sql.gz' -mtime +7 -delete
-           echo \"Old backups cleaned\"
-         else
-           echo \"Backup FAILED!\" >&2
-         fi
-         sleep 86400;
-       done"
+      - ./backup.sh:/backup.sh:ro
+    environment:
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+    entrypoint: [ "/backup.sh" ]
     networks:
       - sql_Backup
     restart: unless-stopped
 
   sonar-db:
-    image: postgres:15
+    image: postgres:17 # Dernière version supportée par sonarqube
     container_name: sonar-db
     environment:
-      POSTGRES_USER: ${SONAR_USER}
-      POSTGRES_PASSWORD: ${SONAR_PASSOWORD}
-      POSTGRES_DB: ${SONAR_DB}
+      POSTGRES_USER: ${SONAR_DB_USER}
+      POSTGRES_PASSWORD: ${SONAR_DB_PASSWORD}
+      POSTGRES_DB: ${SONAR_DB_NAME}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sonar"]
-      interval: 5s
-      retries: 10
+      test: ["CMD-SHELL", "pg_isready -U ${SONAR_DB_USER} -d ${SONAR_DB_NAME}"]
+      interval: 10s
+      retries: 20
     volumes:
       - sonar_db_data:/var/lib/postgresql/data
     networks:
-      - sql_Spring
+      - sonar_network
 
   sonarqube:
-    image: sonarqube:lts-community
+    image: sonarqube:community # Dernière version sonarqube en community
     container_name: sonarqube
     environment:
-      SONAR_JDBC_URL: jdbc:postgresql://sonar-db:5432/sonarqube
-      SONAR_JDBC_USERNAME: ${SONAR_JDBC_USERNAME}
-      SONAR_JDBC_PASSWORD: ${SONAR_JDBC_PASSWORD}
+      SONAR_JDBC_URL: jdbc:postgresql://sonar-db:5432/${SONAR_DB_NAME}
+      SONAR_JDBC_USERNAME: ${SONAR_DB_USER}
+      SONAR_JDBC_PASSWORD: ${SONAR_DB_PASSWORD}
       SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: true
     volumes:
       - sonar_data:/opt/sonarqube/data
@@ -147,23 +139,23 @@ services:
       sonar-db:
         condition: service_healthy
     networks:
-      - sql_Spring
+      - sonar_network
 
   sonar-maven-scanner:
-    image: maven:3.9.9-eclipse-temurin-21
+    image: maven:3.9  # Dernière version Maven 3.0 avant la version 4.0 (Release candidate actuellement)
     container_name: sonar-maven-scanner
     working_dir: /app
     volumes:
       - .:/app
       - maven_cache:/root/.m2
     environment:
-      SONAR_HOST_URL: ${SONAR_HOST_URL}
+      SONAR_HOST_URL: "http://sonarqube:9000"
       SONAR_TOKEN: ${SONAR_TOKEN}
     depends_on:
       sonarqube:
         condition: service_started
     networks:
-      - sql_Spring
+      - sonar_network
     profiles:
       - scan
     restart: "no"
@@ -188,11 +180,16 @@ networks:
     driver: bridge # Réseaux de MySQL et App Srping
   sql_Backup:
     driver: bridge # Réseau de Mysql et backup
+  sonar_network:
+    driver: bridge # Réseau de Sonar
 
 volumes:
-  db_data: # Volume de stockage de la Base de données
-  sonar_db_data:
-  maven_cache:
-  sonar_data:
-  sonar_extensions:
-  sonar_logs:
+  db_data:          # Volume de stockage de la Base de données applicative
+
+  sonar_db_data:    # Volume de stockage de la Base de données Sonarcube
+
+  sonar_data:       # Volume de stockage Sonarcube - data
+  sonar_extensions: # Volume de stockage Sonarcube - extension/plugin
+  sonar_logs:       # Volume de stockage Sonarcube - logs
+
+  maven_cache:      #  sonar-maven-scanner
